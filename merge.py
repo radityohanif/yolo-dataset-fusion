@@ -13,19 +13,40 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 
 
+# ── Terminal colors (ANSI, stdlib only) ─────────────────────────────────────
+
+def _use_color() -> bool:
+    if os.environ.get("NO_COLOR", "").strip():
+        return False
+    if os.environ.get("FORCE_COLOR", "").strip():
+        return True
+    return sys.stdout.isatty()
+
+
+def style(text: str, *codes: int) -> str:
+    """Wrap text in SGR codes; no-op when color disabled."""
+    if not _use_color() or not codes:
+        return text
+    seq = ";".join(str(c) for c in codes)
+    return f"\033[{seq}m{text}\033[0m"
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def print_header(title: str):
     width = 60
-    print(f"\n{'=' * width}")
-    print(f"  {title}")
-    print(f"{'=' * width}")
+    bar = "=" * width
+    bar_styled = style(bar, 36) if _use_color() else bar
+    title_styled = style(f"  {title}", 1, 96) if _use_color() else f"  {title}"
+    print(f"\n{bar_styled}")
+    print(title_styled)
+    print(bar_styled)
 
 
 def print_table(headers: list[str], rows: list[list], align: list[str] | None = None):
     """Pretty-print a table. align: list of '<' or '>' per column."""
     if not rows:
-        print("  (no data)")
+        print(style("  (no data)", 2))
         return
     col_widths = [len(h) for h in headers]
     str_rows = [[str(c) for c in r] for r in rows]
@@ -35,32 +56,39 @@ def print_table(headers: list[str], rows: list[list], align: list[str] | None = 
     if align is None:
         align = ["<"] * len(headers)
     fmt = "  ".join(f"{{:{a}{w}}}" for a, w in zip(align, col_widths))
-    print(f"  {fmt.format(*headers)}")
-    print(f"  {'  '.join('-' * w for w in col_widths)}")
+    sep = "  ".join("-" * w for w in col_widths)
+    header_line = fmt.format(*headers)
+    print(f"  {style(header_line, 1, 33)}" if _use_color() else f"  {header_line}")
+    print(style(f"  {sep}", 2) if _use_color() else f"  {sep}")
     for r in str_rows:
-        print(f"  {fmt.format(*r)}")
+        line = fmt.format(*r)
+        if _use_color() and r[1] == "TOTAL":
+            line = style(line, 1, 32)
+        print(f"  {line}")
 
 
 def prompt_choice(prompt: str, options: list[str]) -> int:
     """Ask user to pick one option by number. Returns 0-based index."""
-    print(f"\n{prompt}")
+    print(f"\n{style(prompt, 1, 97)}")
     for i, opt in enumerate(options, 1):
-        print(f"  [{i}] {opt}")
+        idx_s = style(f"[{i}]", 36, 1)
+        print(f"  {idx_s} {opt}")
     while True:
-        raw = input("  > ").strip()
+        raw = input(style("  > ", 35)).strip()
         if raw.isdigit() and 1 <= int(raw) <= len(options):
             return int(raw) - 1
-        print(f"  Masukkan angka 1-{len(options)}")
+        print(style(f"  Masukkan angka 1-{len(options)}", 31))
 
 
 def prompt_multi_choice(prompt: str, options: list[str]) -> list[int]:
     """Ask user to pick one or more options (comma-separated). Returns sorted 0-based indices."""
-    print(f"\n{prompt}")
+    print(f"\n{style(prompt, 1, 97)}")
     for i, opt in enumerate(options, 1):
-        print(f"  [{i}] {opt}")
-    print(f"  [a] Pilih semua")
+        idx_s = style(f"[{i}]", 36, 1)
+        print(f"  {idx_s} {opt}")
+    print(f"  {style('[a]', 32, 1)} Pilih semua")
     while True:
-        raw = input("  > ").strip().lower()
+        raw = input(style("  > ", 35)).strip().lower()
         if raw == "a":
             return list(range(len(options)))
         parts = [p.strip() for p in raw.split(",")]
@@ -70,7 +98,12 @@ def prompt_multi_choice(prompt: str, options: list[str]) -> list[int]:
                 return sorted(set(indices))
         except ValueError:
             pass
-        print(f"  Masukkan angka 1-{len(options)} dipisah koma, atau 'a' untuk semua")
+        print(
+            style(
+                f"  Masukkan angka 1-{len(options)} dipisah koma, atau 'a' untuk semua",
+                31,
+            )
+        )
 
 
 # ── Parsing ──────────────────────────────────────────────────────────────────
@@ -183,7 +216,10 @@ def display_distribution(
     rows.append(["", "TOTAL", sum(ann_per_class.values()), ""])
     print_table(headers, rows, align=[">"," <", ">", ">"])
     if no_ann_count:
-        print(f"\n  Images tanpa annotation: {no_ann_count}")
+        print(
+            f"\n  {style('Images tanpa annotation:', 33)} "
+            f"{style(str(no_ann_count), 1, 33)}"
+        )
 
 
 # ── Balancing ────────────────────────────────────────────────────────────────
@@ -315,7 +351,7 @@ def main():
     # 1. Scan files
     ndjson_files = sorted(glob.glob(os.path.join(DATA_DIR, "*.ndjson")))
     if not ndjson_files:
-        print(f"\n  Tidak ada file .ndjson di {DATA_DIR}")
+        print(style(f"\n  Tidak ada file .ndjson di {DATA_DIR}", 31, 1))
         sys.exit(1)
 
     # 2. Select files
@@ -331,7 +367,7 @@ def main():
 
     indices = prompt_multi_choice("Pilih file yang ingin di-merge:", display_names)
     selected = [parsed[i] for i in indices]
-    print(f"\n  Dipilih: {len(selected)} file")
+    print(f"\n  {style('Dipilih:', 2)} {style(str(len(selected)), 32, 1)} file")
 
     # 3. Build unified class map & remap
     unified_map, remap_tables = build_unified_class_map(selected)
@@ -375,25 +411,40 @@ def main():
     if mode in ("ratio", "count"):
         total_ann = sum(ann_per_class.values())
         targets = {}
-        print(f"\n  Masukkan target per class:")
+        print(f"\n  {style('Masukkan target per class:', 1, 97)}")
         for cid in sorted(id_to_name.keys()):
             name = id_to_name[cid]
             current = ann_per_class.get(cid, 0)
             if mode == "ratio":
                 while True:
-                    raw = input(f"    {name} (saat ini {current} ann) - persentase target (%): ").strip()
+                    raw = input(
+                        style(
+                            f"    {name} (saat ini {current} ann) - persentase target (%): ",
+                            2,
+                        )
+                    ).strip()
                     try:
                         pct = float(raw)
                         if 0 < pct <= 100:
                             targets[cid] = int(total_ann * pct / 100)
-                            print(f"      -> target: ~{targets[cid]} annotations")
+                            print(
+                                style(
+                                    f"      -> target: ~{targets[cid]} annotations",
+                                    32,
+                                )
+                            )
                             break
                     except ValueError:
                         pass
-                    print("      Masukkan angka 1-100")
+                    print(style("      Masukkan angka 1-100", 31))
             else:
                 while True:
-                    raw = input(f"    {name} (saat ini {current} ann) - jumlah target: ").strip()
+                    raw = input(
+                        style(
+                            f"    {name} (saat ini {current} ann) - jumlah target: ",
+                            2,
+                        )
+                    ).strip()
                     try:
                         count = int(raw)
                         if count > 0:
@@ -401,7 +452,7 @@ def main():
                             break
                     except ValueError:
                         pass
-                    print("      Masukkan angka positif")
+                    print(style("      Masukkan angka positif", 31))
 
     # 7. Apply balancing
     balanced = balance_images(all_images, unified_map, mode, targets, include_no_ann)
@@ -410,12 +461,20 @@ def main():
     bal_ann, bal_img, bal_no_ann = count_distribution(balanced, unified_map)
     print_header("Preview Hasil Setelah Balancing")
     display_distribution(bal_ann, bal_img, bal_no_ann, id_to_name)
-    print(f"\n  Total images dalam output: {len(balanced)}")
+    print(
+        f"\n  {style('Total images dalam output:', 1)} "
+        f"{style(str(len(balanced)), 96, 1)}"
+    )
 
     # 8. Output filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     default_name = f"merged_{timestamp}.ndjson"
-    raw_name = input(f"\n  Nama file output (kosongkan untuk '{default_name}'): ").strip()
+    raw_name = input(
+        style(
+            f"\n  Nama file output (kosongkan untuk '{default_name}'): ",
+            2,
+        )
+    ).strip()
     if not raw_name:
         raw_name = default_name
     if not raw_name.endswith(".ndjson"):
@@ -424,23 +483,33 @@ def main():
     output_path = os.path.join(OUTPUT_DIR, raw_name)
 
     # 9. Confirm
-    print(f"\n  Akan menulis {len(balanced)} images ke: {output_path}")
-    confirm = input("  Lanjutkan? (y/n): ").strip().lower()
+    print(
+        f"\n  {style('Akan menulis', 2)} "
+        f"{style(str(len(balanced)), 33, 1)} {style('images ke:', 2)} "
+        f"{style(output_path, 36, 1)}"
+    )
+    confirm = input(style("  Lanjutkan? (y/n): ", 35)).strip().lower()
     if confirm not in ("y", "yes"):
-        print("  Dibatalkan.")
+        print(style("  Dibatalkan.", 33))
         sys.exit(0)
 
     # 10. Write
     write_merged(output_path, unified_map, balanced, source_names)
 
     print_header("Selesai!")
-    print(f"  Output: {output_path}")
-    print(f"  Total images: {len(balanced)}")
+    print(f"  {style('Output:', 2)} {style(output_path, 32, 1)}")
+    print(
+        f"  {style('Total images:', 2)} "
+        f"{style(str(len(balanced)), 97, 1)}"
+    )
     total_boxes = sum(
         len(img.get("annotations", {}).get("boxes", []))
         for img in balanced
     )
-    print(f"  Total annotations: {total_boxes}")
+    print(
+        f"  {style('Total annotations:', 2)} "
+        f"{style(str(total_boxes), 97, 1)}"
+    )
     print()
 
 
