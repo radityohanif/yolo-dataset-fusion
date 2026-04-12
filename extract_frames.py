@@ -3,6 +3,7 @@
 
 import glob
 import os
+import shutil
 import sys
 from datetime import datetime
 
@@ -193,6 +194,21 @@ def extract_frames(
     return saved, None
 
 
+def zip_output_dir(out_dir: str) -> tuple[str | None, str | None]:
+    """
+    Create <out_dir>.zip; archive entries are files relative to out_dir (no parent folder).
+    Returns (zip_path, error_message_or_None).
+    """
+    zip_path = out_dir + ".zip"
+    try:
+        if os.path.isfile(zip_path):
+            os.remove(zip_path)
+        arc = shutil.make_archive(out_dir, "zip", root_dir=out_dir)
+        return arc, None
+    except OSError as e:
+        return None, str(e)
+
+
 def main():
     print_header("Extract frames from video")
     ensure_data_and_output_dirs()
@@ -325,6 +341,18 @@ def main():
         f"  {style('Estimated image count:', 2)} {est_msg}"
     )
 
+    make_zip = (
+        input(
+            style(
+                "  Also create a .zip archive of the frames after extraction? (y/n): ",
+                35,
+            )
+        )
+        .strip()
+        .lower()
+        in ("y", "yes")
+    )
+
     confirm = input(style("  Continue? (y/n): ", 35)).strip().lower()
     if confirm not in ("y", "yes"):
         print(style("  Cancelled.", 33))
@@ -339,6 +367,15 @@ def main():
     print_header("Done")
     print(f"  {style('Output:', 2)} {style(out_dir, 32, 1)}")
     print(f"  {style('Total images saved:', 2)} {style(str(saved), 97, 1)}")
+    if make_zip:
+        if saved <= 0:
+            print(style("  Skipped .zip (no frames were saved).", 33))
+        else:
+            zpath, zerr = zip_output_dir(out_dir)
+            if zerr:
+                print(style(f"  Could not create .zip: {zerr}", 31))
+            elif zpath:
+                print(f"  {style('Archive:', 2)} {style(zpath, 32, 1)}")
     print()
 
 
