@@ -1,4 +1,6 @@
 # merge.py uses only the Python standard library — no third-party packages to install.
 # extract_frames.py needs OpenCV for video decode (headless = no GUI).
 opencv-python-headless>=4.8.0
+# crawl_images.py — download images from Bing/Google by keyword.
+icrawler>=0.6.6
 # Python 3.10+ is required (PEP 604 union types and list[str] builtin generics).

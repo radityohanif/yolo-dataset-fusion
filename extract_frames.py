@@ -3,62 +3,24 @@
 
 import glob
 import os
-import shutil
 import sys
 from datetime import datetime
 
 import cv2
 
+from cli_utils import (
+    count_images_in_dir,
+    fmt_size as _fmt_size,
+    print_header,
+    prompt_choice,
+    style,
+    zip_output_dir,
+)
 from paths import DATA_DIR, OUTPUT_DIR, ensure_data_and_output_dirs
 
 VIDEO_GLOBS = ("*.mp4", "*.mov", "*.mkv", "*.avi", "*.webm", "*.m4v")
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 JPEG_QUALITY = 92
-
-
-def _use_color() -> bool:
-    if os.environ.get("NO_COLOR", "").strip():
-        return False
-    if os.environ.get("FORCE_COLOR", "").strip():
-        return True
-    return sys.stdout.isatty()
-
-
-def style(text: str, *codes: int) -> str:
-    if not _use_color() or not codes:
-        return text
-    seq = ";".join(str(c) for c in codes)
-    return f"\033[{seq}m{text}\033[0m"
-
-
-def print_header(title: str):
-    width = 60
-    bar = "=" * width
-    bar_styled = style(bar, 36) if _use_color() else bar
-    title_styled = style(f"  {title}", 1, 96) if _use_color() else f"  {title}"
-    print(f"\n{bar_styled}")
-    print(title_styled)
-    print(bar_styled)
-
-
-def prompt_choice(prompt: str, options: list[str]) -> int:
-    print(f"\n{style(prompt, 1, 97)}")
-    for i, opt in enumerate(options, 1):
-        idx_s = style(f"[{i}]", 36, 1)
-        print(f"  {idx_s} {opt}")
-    while True:
-        raw = input(style("  > ", 35)).strip()
-        if raw.isdigit() and 1 <= int(raw) <= len(options):
-            return int(raw) - 1
-        print(style(f"  Enter a number from 1 to {len(options)}", 31))
-
-
-def _fmt_size(num: int) -> str:
-    for unit in ("B", "KB", "MB", "GB"):
-        if num < 1024.0:
-            return f"{num:.1f} {unit}" if unit != "B" else f"{int(num)} B"
-        num /= 1024.0
-    return f"{num:.1f} TB"
 
 
 def scan_video_paths() -> list[str]:
@@ -92,16 +54,6 @@ def probe_video(path: str) -> tuple[float | None, int | None, float | None]:
         return fps, n, None
     return float(fps), n, float(duration)
 
-
-def count_images_in_dir(dirpath: str) -> int:
-    if not os.path.isdir(dirpath):
-        return 0
-    n = 0
-    for name in os.listdir(dirpath):
-        low = name.lower()
-        if any(low.endswith(s) for s in IMAGE_SUFFIXES):
-            n += 1
-    return n
 
 
 def prompt_float_minutes(label: str, empty_hint: str, max_min: float | None) -> float | None:
@@ -193,20 +145,6 @@ def extract_frames(
     cap.release()
     return saved, None
 
-
-def zip_output_dir(out_dir: str) -> tuple[str | None, str | None]:
-    """
-    Create <out_dir>.zip; archive entries are files relative to out_dir (no parent folder).
-    Returns (zip_path, error_message_or_None).
-    """
-    zip_path = out_dir + ".zip"
-    try:
-        if os.path.isfile(zip_path):
-            os.remove(zip_path)
-        arc = shutil.make_archive(out_dir, "zip", root_dir=out_dir)
-        return arc, None
-    except OSError as e:
-        return None, str(e)
 
 
 def main():
