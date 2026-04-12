@@ -96,10 +96,6 @@ Both scripts respect:
 - **`NO_COLOR`** — any non-empty value disables ANSI colors.
 - **`FORCE_COLOR`** — any non-empty value forces colors even when stdout is not a TTY.
 
-## UI language
-
-Interactive prompts and many messages are in **Indonesian**.
-
 ## License
 
 Add a `LICENSE` file if you publish this repository; none is included in the default tree.

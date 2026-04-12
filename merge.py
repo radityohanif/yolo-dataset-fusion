@@ -76,7 +76,7 @@ def prompt_choice(prompt: str, options: list[str]) -> int:
         raw = input(style("  > ", 35)).strip()
         if raw.isdigit() and 1 <= int(raw) <= len(options):
             return int(raw) - 1
-        print(style(f"  Masukkan angka 1-{len(options)}", 31))
+        print(style(f"  Enter a number from 1 to {len(options)}", 31))
 
 
 def prompt_multi_choice(prompt: str, options: list[str]) -> list[int]:
@@ -85,7 +85,7 @@ def prompt_multi_choice(prompt: str, options: list[str]) -> list[int]:
     for i, opt in enumerate(options, 1):
         idx_s = style(f"[{i}]", 36, 1)
         print(f"  {idx_s} {opt}")
-    print(f"  {style('[a]', 32, 1)} Pilih semua")
+    print(f"  {style('[a]', 32, 1)} Select all")
     while True:
         raw = input(style("  > ", 35)).strip().lower()
         if raw == "a":
@@ -99,7 +99,7 @@ def prompt_multi_choice(prompt: str, options: list[str]) -> list[int]:
             pass
         print(
             style(
-                f"  Masukkan angka 1-{len(options)} dipisah koma, atau 'a' untuk semua",
+                f"  Enter numbers 1-{len(options)} separated by commas, or 'a' for all",
                 31,
             )
         )
@@ -202,7 +202,7 @@ def display_distribution(
     no_ann_count: int,
     id_to_name: dict[int, str],
 ):
-    print_header("Distribusi Dataset")
+    print_header("Dataset distribution")
     headers = ["Class ID", "Class Name", "Annotations", "Images"]
     rows = []
     for cid in sorted(id_to_name.keys()):
@@ -216,7 +216,7 @@ def display_distribution(
     print_table(headers, rows, align=[">"," <", ">", ">"])
     if no_ann_count:
         print(
-            f"\n  {style('Images tanpa annotation:', 33)} "
+            f"\n  {style('Images without annotations:', 33)} "
             f"{style(str(no_ann_count), 1, 33)}"
         )
 
@@ -351,7 +351,7 @@ def main():
     # 1. Scan files
     ndjson_files = sorted(glob.glob(os.path.join(DATA_DIR, "*.ndjson")))
     if not ndjson_files:
-        print(style(f"\n  Tidak ada file .ndjson di {DATA_DIR}", 31, 1))
+        print(style(f"\n  No .ndjson files in {DATA_DIR}", 31, 1))
         sys.exit(1)
 
     # 2. Select files
@@ -365,9 +365,9 @@ def main():
         classes_str = ", ".join(f"{v}" for v in class_names.values()) if class_names else "-"
         display_names.append(f"{name}  ({len(images)} images, classes: {classes_str})")
 
-    indices = prompt_multi_choice("Pilih file yang ingin di-merge:", display_names)
+    indices = prompt_multi_choice("Select files to merge:", display_names)
     selected = [parsed[i] for i in indices]
-    print(f"\n  {style('Dipilih:', 2)} {style(str(len(selected)), 32, 1)} file")
+    print(f"\n  {style('Selected:', 2)} {style(str(len(selected)), 32, 1)} file(s)")
 
     # 3. Build unified class map & remap
     unified_map, remap_tables = build_unified_class_map(selected)
@@ -389,19 +389,19 @@ def main():
     include_no_ann = False
     if no_ann_count > 0:
         choice = prompt_choice(
-            f"Ada {no_ann_count} image tanpa annotation. Apa yang ingin dilakukan?",
-            ["Include (sebagai negative sample)", "Skip (buang)"],
+            f"There are {no_ann_count} images without annotations. What should we do?",
+            ["Include them (as negative samples)", "Skip (discard)"],
         )
         include_no_ann = choice == 0
 
     # 6. Balancing mode
     mode_choice = prompt_choice(
-        "Pilih mode balancing:",
+        "Choose a balancing mode:",
         [
-            "No balance (gunakan semua data apa adanya)",
-            "Equal balance (undersample ke jumlah class terkecil)",
-            "Custom ratio (tentukan persentase per class)",
-            "Custom count (tentukan jumlah annotation per class)",
+            "No balance (use all data as-is)",
+            "Equal balance (undersample to the smallest class)",
+            "Custom ratio (set target percentage per class)",
+            "Custom count (set target annotation count per class)",
         ],
     )
     mode_map = {0: "none", 1: "equal", 2: "ratio", 3: "count"}
@@ -411,7 +411,7 @@ def main():
     if mode in ("ratio", "count"):
         total_ann = sum(ann_per_class.values())
         targets = {}
-        print(f"\n  {style('Masukkan target per class:', 1, 97)}")
+        print(f"\n  {style('Enter targets per class:', 1, 97)}")
         for cid in sorted(id_to_name.keys()):
             name = id_to_name[cid]
             current = ann_per_class.get(cid, 0)
@@ -419,7 +419,7 @@ def main():
                 while True:
                     raw = input(
                         style(
-                            f"    {name} (saat ini {current} ann) - persentase target (%): ",
+                            f"    {name} (currently {current} ann) - target percentage (%): ",
                             2,
                         )
                     ).strip()
@@ -436,12 +436,12 @@ def main():
                             break
                     except ValueError:
                         pass
-                    print(style("      Masukkan angka 1-100", 31))
+                    print(style("      Enter a number between 1 and 100", 31))
             else:
                 while True:
                     raw = input(
                         style(
-                            f"    {name} (saat ini {current} ann) - jumlah target: ",
+                            f"    {name} (currently {current} ann) - target count: ",
                             2,
                         )
                     ).strip()
@@ -452,17 +452,17 @@ def main():
                             break
                     except ValueError:
                         pass
-                    print(style("      Masukkan angka positif", 31))
+                    print(style("      Enter a positive integer", 31))
 
     # 7. Apply balancing
     balanced = balance_images(all_images, unified_map, mode, targets, include_no_ann)
 
     # Show result preview
     bal_ann, bal_img, bal_no_ann = count_distribution(balanced, unified_map)
-    print_header("Preview Hasil Setelah Balancing")
+    print_header("Preview after balancing")
     display_distribution(bal_ann, bal_img, bal_no_ann, id_to_name)
     print(
-        f"\n  {style('Total images dalam output:', 1)} "
+        f"\n  {style('Total images in output:', 1)} "
         f"{style(str(len(balanced)), 96, 1)}"
     )
 
@@ -471,7 +471,7 @@ def main():
     default_name = f"merged_{timestamp}.ndjson"
     raw_name = input(
         style(
-            f"\n  Nama file output (kosongkan untuk '{default_name}'): ",
+            f"\n  Output filename (leave empty for '{default_name}'): ",
             2,
         )
     ).strip()
@@ -484,19 +484,19 @@ def main():
 
     # 9. Confirm
     print(
-        f"\n  {style('Akan menulis', 2)} "
-        f"{style(str(len(balanced)), 33, 1)} {style('images ke:', 2)} "
+        f"\n  {style('Will write', 2)} "
+        f"{style(str(len(balanced)), 33, 1)} {style('images to:', 2)} "
         f"{style(output_path, 36, 1)}"
     )
-    confirm = input(style("  Lanjutkan? (y/n): ", 35)).strip().lower()
+    confirm = input(style("  Continue? (y/n): ", 35)).strip().lower()
     if confirm not in ("y", "yes"):
-        print(style("  Dibatalkan.", 33))
+        print(style("  Cancelled.", 33))
         sys.exit(0)
 
     # 10. Write
     write_merged(output_path, unified_map, balanced, source_names)
 
-    print_header("Selesai!")
+    print_header("Done")
     print(f"  {style('Output:', 2)} {style(output_path, 32, 1)}")
     print(
         f"  {style('Total images:', 2)} "

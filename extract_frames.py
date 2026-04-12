@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ekstraksi frame (gambar) dari video — CLI interaktif, output ke ./output/<subdir>/."""
+"""Extract image frames from video — interactive CLI; writes JPEGs under ./output/<subdir>/."""
 
 import glob
 import os
@@ -49,7 +49,7 @@ def prompt_choice(prompt: str, options: list[str]) -> int:
         raw = input(style("  > ", 35)).strip()
         if raw.isdigit() and 1 <= int(raw) <= len(options):
             return int(raw) - 1
-        print(style(f"  Masukkan angka 1-{len(options)}", 31))
+        print(style(f"  Enter a number from 1 to {len(options)}", 31))
 
 
 def _fmt_size(num: int) -> str:
@@ -104,25 +104,25 @@ def count_images_in_dir(dirpath: str) -> int:
 
 
 def prompt_float_minutes(label: str, empty_hint: str, max_min: float | None) -> float | None:
-    """Return menit (float) atau None jika pengguna mengosongkan (arti: batas default)."""
-    extra = f", maks ~{max_min:.3f} menit" if max_min is not None else ""
+    """Return minutes as float, or None if the user leaves the input empty (use default bound)."""
+    extra = f", max ~{max_min:.3f} min" if max_min is not None else ""
     while True:
         raw = input(
-            style(f"  {label} (kosong = {empty_hint}{extra}): ", 2)
+            style(f"  {label} (empty = {empty_hint}{extra}): ", 2)
         ).strip()
         if not raw:
             return None
         try:
             v = float(raw.replace(",", "."))
             if v < 0:
-                print(style("  Masukkan angka >= 0", 31))
+                print(style("  Enter a number >= 0", 31))
                 continue
             if max_min is not None and v > max_min + 1e-6:
-                print(style(f"  Nilai melebihi durasi video (~{max_min:.3f} menit)", 31))
+                print(style(f"  Value exceeds video duration (~{max_min:.3f} min)", 31))
                 continue
             return v
         except ValueError:
-            print(style("  Masukkan angka desimal (menit), contoh: 0 atau 1.5", 31))
+            print(style("  Enter a decimal number (minutes), e.g. 0 or 1.5", 31))
 
 
 def estimate_saved_frames(
@@ -150,12 +150,12 @@ def extract_frames(
 ) -> tuple[int, str | None]:
     """
     Seeking via CAP_PROP_POS_MSEC is not always frame-accurate for all codecs.
-    t_end_sec None = sampai video habis (EOF).
+    t_end_sec None means read until end of file (EOF).
     Returns (saved_count, error_message_or_None).
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        return 0, "Tidak bisa membuka video (codec tidak didukung atau file rusak)"
+        return 0, "Could not open video (unsupported codec or corrupt file)"
 
     start_ms = max(0.0, t_start_sec) * 1000.0
     cap.set(cv2.CAP_PROP_POS_MSEC, start_ms)
@@ -194,13 +194,13 @@ def extract_frames(
 
 
 def main():
-    print_header("Ekstraksi frame dari video")
+    print_header("Extract frames from video")
     ensure_data_and_output_dirs()
 
     paths = scan_video_paths()
     if not paths:
-        print(style(f"\n  Tidak ada file video di {DATA_DIR}", 31, 1))
-        print(style("  Letakkan file .mp4, .mov, .mkv, .avi, .webm, atau .m4v di folder data.", 2))
+        print(style(f"\n  No video files in {DATA_DIR}", 31, 1))
+        print(style("  Add .mp4, .mov, .mkv, .avi, .webm, or .m4v files to the data folder.", 2))
         sys.exit(1)
 
     meta: list[tuple[str, float | None, int | None, float | None]] = []
@@ -212,18 +212,18 @@ def main():
         if dur is not None and fps:
             line = f"{base}  ({_fmt_size(size_b)}, ~{dur:.1f}s, ~{fps:.2f} fps, {n} frames)"
         elif n:
-            line = f"{base}  ({_fmt_size(size_b)}, ~{n} frames, durasi/fps tak pasti)"
+            line = f"{base}  ({_fmt_size(size_b)}, ~{n} frames, duration/fps uncertain)"
         else:
-            line = f"{base}  ({_fmt_size(size_b)}, metadata terbatas)"
+            line = f"{base}  ({_fmt_size(size_b)}, limited metadata)"
         options.append(line)
         meta.append((p, fps, n, dur))
 
-    idx = prompt_choice("Pilih video yang ingin diekstrak:", options)
+    idx = prompt_choice("Select a video to extract:", options)
     video_path, fps, n_frames, duration_sec = meta[idx][0], meta[idx][1], meta[idx][2], meta[idx][3]
 
     cap_check = cv2.VideoCapture(video_path)
     if not cap_check.isOpened():
-        print(style("\n  Gagal membuka file video. Coba codec lain atau konversi ke H.264/AAC.", 31))
+        print(style("\n  Failed to open video. Try another codec or convert to H.264/AAC.", 31))
         sys.exit(1)
     cap_check.release()
 
@@ -232,14 +232,14 @@ def main():
     default_subdir = f"frames_{stem}_{ts}"
     raw_sub = input(
         style(
-            f"\n  Nama folder di bawah output (kosongkan untuk '{default_subdir}'): ",
+            f"\n  Subfolder under output (leave empty for '{default_subdir}'): ",
             2,
         )
     ).strip()
     subdir = raw_sub if raw_sub else default_subdir
     subdir = subdir.replace(os.sep, "_").strip("/.")
     if not subdir:
-        print(style("  Nama folder tidak valid.", 31))
+        print(style("  Invalid folder name.", 31))
         sys.exit(1)
 
     out_dir = os.path.join(OUTPUT_DIR, subdir)
@@ -247,24 +247,24 @@ def main():
     if existing > 0:
         print(
             style(
-                f"\n  Folder sudah berisi {existing} gambar. "
-                f"Melanjutkan akan menulis ulang frame_000001.jpg dst. sesuai urutan ekstraksi.",
+                f"\n  Folder already has {existing} image(s). "
+                f"Continuing will overwrite frame_000001.jpg etc. in extraction order.",
                 33,
             )
         )
-        ok = input(style("  Tetap gunakan folder ini? (y/n): ", 35)).strip().lower()
+        ok = input(style("  Use this folder anyway? (y/n): ", 35)).strip().lower()
         if ok not in ("y", "yes"):
-            print(style("  Dibatalkan.", 33))
+            print(style("  Cancelled.", 33))
             sys.exit(0)
 
     dur_min = (duration_sec / 60.0) if duration_sec else None
 
     print(
-        f"\n  {style('Rentang waktu (menit).', 1, 97)} "
-        f"{style('CAP_PROP_POS_MSEC tidak selalu tepat per-frame untuk semua codec.', 2)}"
+        f"\n  {style('Time range (minutes)', 1, 97)} "
+        f"{style('CAP_PROP_POS_MSEC is not always frame-accurate for every codec.', 2)}"
     )
-    start_min = prompt_float_minutes("Mulai dari menit", "dari awal", dur_min)
-    end_min = prompt_float_minutes("Sampai menit", "sampai akhir", dur_min)
+    start_min = prompt_float_minutes("Start at minute", "from beginning", dur_min)
+    end_min = prompt_float_minutes("End at minute", "through end", dur_min)
 
     t_start = 0.0 if start_min is None else start_min * 60.0
 
@@ -282,16 +282,16 @@ def main():
         t_start = min(max(0.0, t_start), duration_sec)
 
     if duration_sec is None and end_min is None:
-        print(style("  Durasi video tidak terbaca; ekstraksi berjalan sampai akhir file.", 33))
+        print(style("  Video duration unknown; extraction runs until end of file.", 33))
 
     if t_end != float("inf") and t_start >= t_end - 1e-9:
-        print(style("  Rentang waktu tidak valid (awal harus sebelum akhir).", 31))
+        print(style("  Invalid time range (start must be before end).", 31))
         sys.exit(1)
 
     while True:
         raw_iv = input(
             style(
-                "  Ambil 1 frame setiap berapa detik? (0 = setiap frame dalam rentang): ",
+                "  Save one frame every how many seconds? (0 = every frame in range): ",
                 2,
             )
         ).strip()
@@ -301,33 +301,33 @@ def main():
         try:
             interval_sec = float(raw_iv.replace(",", "."))
             if interval_sec < 0:
-                print(style("  Masukkan angka >= 0", 31))
+                print(style("  Enter a number >= 0", 31))
                 continue
             break
         except ValueError:
-            print(style("  Masukkan angka, contoh: 0 atau 1.5", 31))
+            print(style("  Enter a number, e.g. 0 or 1.5", 31))
 
     eff_fps = fps if fps and fps > 0 else 0.0
     if t_end == float("inf"):
-        est_msg = "perkiraan tidak tersedia (durasi tak diketahui)"
+        est_msg = "estimate unavailable (duration unknown)"
     else:
         est = estimate_saved_frames(t_start, t_end, eff_fps, interval_sec)
-        est_msg = f"~{est} file" if est else "0 file"
+        est_msg = f"~{est} files" if est else "0 files"
 
     print(
-        f"\n  {style('Ringkasan:', 1, 97)}\n"
+        f"\n  {style('Summary', 1, 97)}\n"
         f"  {style('Video:', 2)} {style(video_path, 36)}\n"
         f"  {style('Output:', 2)} {style(out_dir, 36)}\n"
-        f"  {style('Rentang:', 2)} {t_start:.2f}s – "
+        f"  {style('Range:', 2)} {t_start:.2f}s – "
         f"{('∞' if t_end == float('inf') else f'{t_end:.2f}s')}\n"
-        f"  {style('Interval simpan:', 2)} "
-        f"{'setiap frame' if interval_sec <= 0 else f'{interval_sec} s'}\n"
-        f"  {style('Perkiraan jumlah gambar:', 2)} {est_msg}"
+        f"  {style('Save interval:', 2)} "
+        f"{'every frame' if interval_sec <= 0 else f'{interval_sec} s'}\n"
+        f"  {style('Estimated image count:', 2)} {est_msg}"
     )
 
-    confirm = input(style("  Lanjutkan? (y/n): ", 35)).strip().lower()
+    confirm = input(style("  Continue? (y/n): ", 35)).strip().lower()
     if confirm not in ("y", "yes"):
-        print(style("  Dibatalkan.", 33))
+        print(style("  Cancelled.", 33))
         sys.exit(0)
 
     t_end_arg = None if t_end == float("inf") else t_end
@@ -336,9 +336,9 @@ def main():
         print(style(f"\n  {err}", 31))
         sys.exit(1)
 
-    print_header("Selesai!")
+    print_header("Done")
     print(f"  {style('Output:', 2)} {style(out_dir, 32, 1)}")
-    print(f"  {style('Total gambar:', 2)} {style(str(saved), 97, 1)}")
+    print(f"  {style('Total images saved:', 2)} {style(str(saved), 97, 1)}")
     print()
 
 

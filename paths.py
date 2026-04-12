@@ -1,4 +1,4 @@
-"""Lokasi folder proyek; pastikan ada sebelum skrip membaca/menulis."""
+"""Project data/output directory paths; ensure they exist before scripts read or write."""
 
 import os
 
