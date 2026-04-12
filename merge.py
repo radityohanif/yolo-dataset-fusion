@@ -9,8 +9,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+from paths import DATA_DIR, OUTPUT_DIR, ensure_data_and_output_dirs
 
 
 # ── Terminal colors (ANSI, stdlib only) ─────────────────────────────────────
@@ -347,6 +346,7 @@ def write_merged(
 
 def main():
     print_header("YOLO NDJSON Dataset Fusion")
+    ensure_data_and_output_dirs()
 
     # 1. Scan files
     ndjson_files = sorted(glob.glob(os.path.join(DATA_DIR, "*.ndjson")))
