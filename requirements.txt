@@ -1,0 +1,2 @@
+# merge.py uses only the Python standard library — no third-party packages to install.
+# Python 3.10+ is required (PEP 604 union types and list[str] builtin generics).
