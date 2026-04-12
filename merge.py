@@ -163,6 +163,75 @@ def remap_image(image: dict, remap: dict[int, int]) -> dict:
     return img
 
 
+def parse_class_keep_list(raw: str) -> set[str] | None:
+    """
+    Parse comma-separated class names from user input.
+    Returns None if the user chose to keep all classes (empty line).
+    Otherwise returns a set of stripped tokens (may be empty if input was only commas).
+    """
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    parts = [p.strip() for p in stripped.split(",")]
+    tokens = {p for p in parts if p}
+    return tokens
+
+
+def resolve_class_names(
+    tokens: set[str], unified_map: dict[str, int]
+) -> tuple[set[str], list[str]]:
+    """
+    Map user tokens to canonical class names from unified_map (case-insensitive).
+    Returns (canonical_names, unknown_tokens).
+    """
+    lower_to_canonical = {name.lower(): name for name in unified_map}
+    canonical: set[str] = set()
+    unknown: list[str] = []
+    seen_unknown_lower: set[str] = set()
+    for t in sorted(tokens, key=str.lower):
+        key = t.lower()
+        if key in lower_to_canonical:
+            canonical.add(lower_to_canonical[key])
+        elif key not in seen_unknown_lower:
+            unknown.append(t)
+            seen_unknown_lower.add(key)
+    return canonical, unknown
+
+
+def filter_images_by_classes(
+    images: list[dict],
+    unified_map: dict[str, int],
+    keep_names: set[str],
+) -> tuple[list[dict], dict[str, int]]:
+    """
+    Deep-copy images, drop boxes whose class is not in keep_names, remap class IDs to 0..K-1.
+    Stable class order: ascending previous unified class id.
+    """
+    sorted_names = sorted(keep_names, key=lambda n: unified_map[n])
+    new_unified_map = {name: i for i, name in enumerate(sorted_names)}
+    old_id_to_new = {unified_map[name]: new_unified_map[name] for name in sorted_names}
+    id_to_name_old = {v: k for k, v in unified_map.items()}
+
+    out: list[dict] = []
+    for image in images:
+        img = json.loads(json.dumps(image))
+        boxes = img.get("annotations", {}).get("boxes") or []
+        new_boxes: list = []
+        for box in boxes:
+            cid = int(box[0])
+            name = id_to_name_old.get(cid)
+            if name is None or name not in keep_names:
+                continue
+            new_box = list(box)
+            new_box[0] = old_id_to_new[cid]
+            new_boxes.append(new_box)
+        ann = img.setdefault("annotations", {})
+        ann["boxes"] = new_boxes
+        out.append(img)
+
+    return out, new_unified_map
+
+
 # ── Counting ─────────────────────────────────────────────────────────────────
 
 def count_distribution(
@@ -384,6 +453,61 @@ def main():
     # 4. Count & display distribution
     ann_per_class, img_per_class, no_ann_count = count_distribution(all_images, unified_map)
     display_distribution(ann_per_class, img_per_class, no_ann_count, id_to_name)
+
+    # 4b. Restrict output to selected classes (comma-separated names)
+    quit_hint = style("'q' = quit", 31)
+    print(
+        f"\n  {style('Classes to keep', 1, 97)} — "
+        f"{style('comma-separated', 2)} "
+        f"(e.g. glove, mask, car). "
+        f"{style('Enter = keep all.', 32)} "
+        f"{quit_hint}"
+    )
+    names_line = ", ".join(sorted(unified_map.keys(), key=str.lower))
+    print(f"  {style('Valid names:', 2)} {names_line}")
+    while True:
+        raw = input(style("  > ", 35))
+        ls = raw.strip().lower()
+        if ls == "q":
+            print(style("  Cancelled.", 33))
+            sys.exit(0)
+        tokens = parse_class_keep_list(raw)
+        if tokens is None:
+            break
+        if not tokens:
+            print(
+                style(
+                    "  Enter at least one class name, or leave empty for all.",
+                    31,
+                )
+            )
+            continue
+        keep_canonical, unknown = resolve_class_names(tokens, unified_map)
+        if unknown:
+            print(
+                style(f"  Unknown class(es): {', '.join(unknown)}", 31),
+            )
+            print(f"  {style('Valid names:', 33)} {names_line}")
+            continue
+        if not keep_canonical:
+            print(style("  No classes matched. Try again.", 31))
+            continue
+        if keep_canonical == set(unified_map.keys()):
+            break
+        all_images, unified_map = filter_images_by_classes(
+            all_images, unified_map, keep_canonical
+        )
+        id_to_name = {v: k for k, v in unified_map.items()}
+        ann_per_class, img_per_class, no_ann_count = count_distribution(
+            all_images, unified_map
+        )
+        print_header("After class filter")
+        display_distribution(ann_per_class, img_per_class, no_ann_count, id_to_name)
+        break
+
+    ann_per_class, img_per_class, no_ann_count = count_distribution(
+        all_images, unified_map
+    )
 
     # 5. Handle images without annotations
     include_no_ann = False
