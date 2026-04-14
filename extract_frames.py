@@ -12,7 +12,6 @@ from cli_utils import (
     count_images_in_dir,
     fmt_size as _fmt_size,
     print_header,
-    prompt_choice,
     style,
     zip_output_dir,
 )
@@ -94,17 +93,60 @@ def estimate_saved_frames(
     return int(span / interval_sec) + 1
 
 
+def parse_video_selection(raw: str, n: int) -> list[int] | None:
+    """
+    Parse user input into 0-based indices.
+    Accepts comma-separated 1-based indices (e.g. 1,2,5), duplicates removed in order,
+    or '*' / 'all' (case-insensitive) for every video.
+    """
+    s = raw.strip().lower()
+    if not s:
+        return None
+    if s in ("*", "all"):
+        return list(range(n))
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    if not parts:
+        return None
+    out: list[int] = []
+    seen: set[int] = set()
+    for p in parts:
+        if not p.isdigit():
+            return None
+        v = int(p)
+        if not (1 <= v <= n):
+            return None
+        i = v - 1
+        if i not in seen:
+            seen.add(i)
+            out.append(i)
+    return out if out else None
+
+
+def count_images_under_tree(parent: str) -> int:
+    """Count image files in parent and in its immediate subfolders."""
+    n = count_images_in_dir(parent)
+    if not os.path.isdir(parent):
+        return n
+    for name in os.listdir(parent):
+        sub = os.path.join(parent, name)
+        if os.path.isdir(sub):
+            n += count_images_in_dir(sub)
+    return n
+
+
 def extract_frames(
     video_path: str,
     out_dir: str,
     t_start_sec: float,
     t_end_sec: float | None,
     interval_sec: float,
+    frame_index_start: int = 1,
 ) -> tuple[int, str | None]:
     """
     Seeking via CAP_PROP_POS_MSEC is not always frame-accurate for all codecs.
     t_end_sec None means read until end of file (EOF).
     Returns (saved_count, error_message_or_None).
+    Frame files are named frame_{index:06d}.jpg with index starting at frame_index_start.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -134,7 +176,8 @@ def extract_frames(
 
         if do_save:
             saved += 1
-            fname = os.path.join(out_dir, f"frame_{saved:06d}.jpg")
+            idx = frame_index_start + saved - 1
+            fname = os.path.join(out_dir, f"frame_{idx:06d}.jpg")
             cv2.imwrite(
                 fname,
                 frame,
@@ -172,18 +215,68 @@ def main():
         options.append(line)
         meta.append((p, fps, n, dur))
 
-    idx = prompt_choice("Select a video to extract:", options)
-    video_path, fps, n_frames, duration_sec = meta[idx][0], meta[idx][1], meta[idx][2], meta[idx][3]
+    print(f"\n{style('Select video(s) to extract:', 1, 97)}")
+    print(
+        style(
+            "  Enter comma-separated numbers (e.g. 1,2,5), or type * or all for every video.",
+            2,
+        )
+    )
+    for i, opt in enumerate(options, 1):
+        idx_s = style(f"[{i}]", 36, 1)
+        print(f"  {idx_s} {opt}")
 
-    cap_check = cv2.VideoCapture(video_path)
-    if not cap_check.isOpened():
-        print(style("\n  Failed to open video. Try another codec or convert to H.264/AAC.", 31))
-        sys.exit(1)
-    cap_check.release()
+    while True:
+        raw_sel = input(style("  > ", 35)).strip()
+        sel = parse_video_selection(raw_sel, len(options))
+        if sel is not None:
+            break
+        print(style(f"  Use 1–{len(options)}, comma-separated list, or * / all.", 31))
 
-    stem = os.path.splitext(os.path.basename(video_path))[0]
+    selected_meta = [meta[i] for i in sel]
+    n_sel = len(sel)
+
+    for vp, _, _, _ in selected_meta:
+        cap_check = cv2.VideoCapture(vp)
+        if not cap_check.isOpened():
+            print(
+                style(
+                    f"\n  Failed to open: {vp}\n"
+                    "  Try another codec or convert to H.264/AAC.",
+                    31,
+                )
+            )
+            sys.exit(1)
+        cap_check.release()
+
+    layout_merged = True
+    if n_sel > 1:
+        print(
+            f"\n{style('Output layout for multiple videos', 1, 97)}\n"
+            f"  {style('[1]', 36, 1)} One folder — "
+            "frame_000001.jpg … in order across all selected videos\n"
+            f"  {style('[2]', 36, 1)} One parent folder — subfolder per video "
+            "(each with its own frame_000001.jpg …)"
+        )
+        while True:
+            raw_l = input(style("  Choose layout [1/2] (default 1): ", 35)).strip() or "1"
+            if raw_l == "1":
+                layout_merged = True
+                break
+            if raw_l == "2":
+                layout_merged = False
+                break
+            print(style("  Enter 1 or 2", 31))
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    default_subdir = f"frames_{stem}_{ts}"
+    if n_sel == 1:
+        stem0 = os.path.splitext(os.path.basename(selected_meta[0][0]))[0]
+        default_subdir = f"frames_{stem0}_{ts}"
+    elif layout_merged:
+        default_subdir = f"frames_merged_{n_sel}v_{ts}"
+    else:
+        default_subdir = f"frames_batch_{n_sel}v_{ts}"
+
     raw_sub = input(
         style(
             f"\n  Subfolder under output (leave empty for '{default_subdir}'): ",
@@ -197,12 +290,16 @@ def main():
         sys.exit(1)
 
     out_dir = os.path.join(OUTPUT_DIR, subdir)
-    existing = count_images_in_dir(out_dir)
+    existing = (
+        count_images_in_dir(out_dir)
+        if n_sel == 1 or layout_merged
+        else count_images_under_tree(out_dir)
+    )
     if existing > 0:
         print(
             style(
-                f"\n  Folder already has {existing} image(s). "
-                f"Continuing will overwrite frame_000001.jpg etc. in extraction order.",
+                f"\n  Output path already has {existing} image(s). "
+                "Continuing may overwrite frame_######.jpg in extraction order.",
                 33,
             )
         )
@@ -211,36 +308,51 @@ def main():
             print(style("  Cancelled.", 33))
             sys.exit(0)
 
-    dur_min = (duration_sec / 60.0) if duration_sec else None
+    known_durs = [m[3] for m in selected_meta if m[3] is not None]
+    dur_min = (min(known_durs) / 60.0) if known_durs else None
 
     print(
         f"\n  {style('Time range (minutes)', 1, 97)} "
-        f"{style('CAP_PROP_POS_MSEC is not always frame-accurate for every codec.', 2)}"
+        f"{style('Same range for each video; end is clipped to each file length.', 2)}"
+    )
+    print(
+        style("  CAP_PROP_POS_MSEC is not always frame-accurate for every codec.", 2)
     )
     start_min = prompt_float_minutes("Start at minute", "from beginning", dur_min)
-    end_min = prompt_float_minutes("End at minute", "through end", dur_min)
+    end_min = prompt_float_minutes("End at minute", "through end of each file", dur_min)
 
-    t_start = 0.0 if start_min is None else start_min * 60.0
+    t_start_sec = 0.0 if start_min is None else start_min * 60.0
+    user_end_sec: float | None = None if end_min is None else end_min * 60.0
 
-    if end_min is None:
-        if duration_sec is not None:
-            t_end: float = duration_sec
-        else:
-            t_end = float("inf")
-    else:
-        t_end = end_min * 60.0
-        if duration_sec is not None:
-            t_end = min(t_end, duration_sec)
+    def span_positive_for_video(dur: float | None) -> bool:
+        ts = t_start_sec
+        if dur is not None:
+            ts = min(max(0.0, ts), dur)
+        if user_end_sec is None:
+            if dur is None:
+                return True
+            return ts < dur - 1e-9
+        te = user_end_sec
+        if dur is not None:
+            te = min(te, dur)
+        return ts < te - 1e-9
 
-    if duration_sec is not None:
-        t_start = min(max(0.0, t_start), duration_sec)
-
-    if duration_sec is None and end_min is None:
-        print(style("  Video duration unknown; extraction runs until end of file.", 33))
-
-    if t_end != float("inf") and t_start >= t_end - 1e-9:
-        print(style("  Invalid time range (start must be before end).", 31))
+    if not any(span_positive_for_video(m[3]) for m in selected_meta):
+        print(
+            style(
+                "  Invalid time range (start must be before end for at least one video).",
+                31,
+            )
+        )
         sys.exit(1)
+
+    if any(m[3] is None for m in selected_meta) and end_min is None:
+        print(
+            style(
+                "  Some videos have unknown duration; those run until EOF.",
+                33,
+            )
+        )
 
     while True:
         raw_iv = input(
@@ -261,19 +373,47 @@ def main():
         except ValueError:
             print(style("  Enter a number, e.g. 0 or 1.5", 31))
 
-    eff_fps = fps if fps and fps > 0 else 0.0
-    if t_end == float("inf"):
-        est_msg = "estimate unavailable (duration unknown)"
-    else:
-        est = estimate_saved_frames(t_start, t_end, eff_fps, interval_sec)
-        est_msg = f"~{est} files" if est else "0 files"
+    est_parts: list[int] = []
+    est_unknown = False
+    for _, fp, _, dur in selected_meta:
+        ts = t_start_sec
+        if dur is not None:
+            ts = min(max(0.0, ts), dur)
+        if user_end_sec is None:
+            if dur is None:
+                est_unknown = True
+                continue
+            te_use = dur
+        elif dur is None:
+            te_use = user_end_sec
+        else:
+            te_use = min(user_end_sec, dur)
+        eff_fp = fp if fp and fp > 0 else 0.0
+        est_parts.append(estimate_saved_frames(ts, te_use, eff_fp, interval_sec))
 
+    if est_unknown and not est_parts:
+        est_msg = "estimate unavailable (duration unknown)"
+    elif est_unknown:
+        est_msg = f"~{sum(est_parts)}+ files (partial; some duration unknown)"
+    else:
+        s_est = sum(est_parts)
+        est_msg = f"~{s_est} files" if s_est else "0 files"
+
+    end_range_txt = (
+        "through end of each file"
+        if user_end_sec is None
+        else f"≤ {user_end_sec:.2f}s (clipped per file)"
+    )
+
+    print(f"\n  {style('Summary', 1, 97)}")
+    for k, (vp, _, _, _) in enumerate(selected_meta, 1):
+        print(f"  {style(f'Video {k}:', 2)} {style(vp, 36)}")
+    if n_sel > 1:
+        layout_txt = "single merged folder" if layout_merged else "subfolder per video"
+        print(f"  {style('Layout:', 2)} {layout_txt}")
+    print(f"  {style('Output:', 2)} {style(out_dir, 36)}")
     print(
-        f"\n  {style('Summary', 1, 97)}\n"
-        f"  {style('Video:', 2)} {style(video_path, 36)}\n"
-        f"  {style('Output:', 2)} {style(out_dir, 36)}\n"
-        f"  {style('Range:', 2)} {t_start:.2f}s – "
-        f"{('∞' if t_end == float('inf') else f'{t_end:.2f}s')}\n"
+        f"  {style('Range:', 2)} start {t_start_sec:.2f}s — end {end_range_txt}\n"
         f"  {style('Save interval:', 2)} "
         f"{'every frame' if interval_sec <= 0 else f'{interval_sec} s'}\n"
         f"  {style('Estimated image count:', 2)} {est_msg}"
@@ -282,7 +422,7 @@ def main():
     make_zip = (
         input(
             style(
-                "  Also create a .zip archive of the frames after extraction? (y/n): ",
+                "  Also create a .zip of the output folder after extraction? (y/n): ",
                 35,
             )
         )
@@ -296,17 +436,54 @@ def main():
         print(style("  Cancelled.", 33))
         sys.exit(0)
 
-    t_end_arg = None if t_end == float("inf") else t_end
-    saved, err = extract_frames(video_path, out_dir, t_start, t_end_arg, interval_sec)
-    if err:
-        print(style(f"\n  {err}", 31))
-        sys.exit(1)
+    next_frame_idx = 1
+    total_saved = 0
+    for video_path, _, _, duration_sec in selected_meta:
+        t_start_v = t_start_sec
+        if duration_sec is not None:
+            t_start_v = min(max(0.0, t_start_sec), duration_sec)
+
+        if user_end_sec is None:
+            t_end_arg = None
+        else:
+            t_end_arg = user_end_sec
+            if duration_sec is not None:
+                t_end_arg = min(t_end_arg, duration_sec)
+
+        if t_end_arg is not None and t_start_v >= t_end_arg - 1e-9:
+            print(style(f"\n  Skipping (empty range): {video_path}", 33))
+            continue
+
+        vid_out = out_dir
+        if n_sel > 1 and not layout_merged:
+            vst = os.path.splitext(os.path.basename(video_path))[0]
+            vid_out = os.path.join(out_dir, vst.replace(os.sep, "_"))
+
+        os.makedirs(vid_out, exist_ok=True)
+
+        chain_indices = (n_sel == 1) or layout_merged
+        fstart = next_frame_idx if chain_indices else 1
+
+        saved, err = extract_frames(
+            video_path,
+            vid_out,
+            t_start_v,
+            t_end_arg,
+            interval_sec,
+            frame_index_start=fstart,
+        )
+        if err:
+            print(style(f"\n  {err}", 31))
+            sys.exit(1)
+        total_saved += saved
+        if chain_indices:
+            next_frame_idx += saved
 
     print_header("Done")
     print(f"  {style('Output:', 2)} {style(out_dir, 32, 1)}")
-    print(f"  {style('Total images saved:', 2)} {style(str(saved), 97, 1)}")
+    print(f"  {style('Total images saved:', 2)} {style(str(total_saved), 97, 1)}")
     if make_zip:
-        if saved <= 0:
+        if total_saved <= 0:
             print(style("  Skipped .zip (no frames were saved).", 33))
         else:
             zpath, zerr = zip_output_dir(out_dir)
