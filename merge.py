@@ -307,26 +307,63 @@ def get_class_images(
     return dict(class_imgs)
 
 
+def _append_no_ann_images(
+    result: list[dict],
+    no_ann: list[dict],
+    no_ann_mode: str,
+    no_ann_value: float | None,
+) -> list[dict]:
+    """
+    Append images without annotations (negative samples).
+    no_ann_mode: "off" | "all" | "count" | "ratio"
+    - "count": at most int(no_ann_value) images, also capped by # of positive images in result.
+    - "ratio": at most (no_ann_value)% of len(result) positives, same caps.
+    """
+    if no_ann_mode == "off" or not no_ann:
+        return result
+    pool = list(no_ann)
+    random.shuffle(pool)
+    if no_ann_mode == "all":
+        result.extend(pool)
+        return result
+    positive = len(result)
+    if positive == 0:
+        return result
+    if no_ann_mode == "count":
+        if no_ann_value is None:
+            return result
+        k = min(int(no_ann_value), len(pool), positive)
+    elif no_ann_mode == "ratio":
+        if no_ann_value is None:
+            return result
+        k = min(int(positive * float(no_ann_value) / 100.0), len(pool), positive)
+    else:
+        return result
+    if k > 0:
+        result.extend(pool[:k])
+    return result
+
+
 def balance_images(
     images: list[dict],
     unified_map: dict[str, int],
     mode: str,
     targets: dict[int, int] | None = None,
-    include_no_ann: bool = False,
+    no_ann_mode: str = "off",
+    no_ann_value: float | None = None,
 ) -> list[dict]:
     """
     Sample images to achieve the desired class balance.
     mode: "none" | "equal" | "ratio" | "count"
     targets: for ratio/count mode, {class_id: target_annotation_count}
+    no_ann_mode: "off" | "all" | "count" | "ratio" — negatives capped vs positives for count/ratio.
     """
     annotated = [img for img in images if img.get("annotations", {}).get("boxes")]
     no_ann = [img for img in images if not img.get("annotations", {}).get("boxes")]
 
     if mode == "none":
         result = list(annotated)
-        if include_no_ann:
-            result.extend(no_ann)
-        return result
+        return _append_no_ann_images(result, no_ann, no_ann_mode, no_ann_value)
 
     ann_per_class = defaultdict(int)
     for img in annotated:
@@ -335,7 +372,7 @@ def balance_images(
 
     if mode == "equal":
         if not ann_per_class:
-            return list(no_ann) if include_no_ann else []
+            return _append_no_ann_images([], no_ann, no_ann_mode, no_ann_value)
         min_count = min(ann_per_class.values())
         targets = {cid: min_count for cid in ann_per_class}
 
@@ -373,9 +410,7 @@ def balance_images(
                     current_counts[c] += cnt
 
     result = [annotated[i] for i in sorted(selected_indices)]
-    if include_no_ann:
-        result.extend(no_ann)
-    return result
+    return _append_no_ann_images(result, no_ann, no_ann_mode, no_ann_value)
 
 
 # ── Output ───────────────────────────────────────────────────────────────────
@@ -417,11 +452,21 @@ def main():
     print_header("YOLO NDJSON Dataset Fusion")
     ensure_data_and_output_dirs()
 
-    # 1. Scan files
-    ndjson_files = sorted(glob.glob(os.path.join(DATA_DIR, "*.ndjson")))
+    # 1. Scan files (data first, then output)
+    ndjson_files: list[str] = []
+    ndjson_files.extend(sorted(glob.glob(os.path.join(DATA_DIR, "*.ndjson"))))
+    ndjson_files.extend(sorted(glob.glob(os.path.join(OUTPUT_DIR, "*.ndjson"))))
     if not ndjson_files:
-        print(style(f"\n  No .ndjson files in {DATA_DIR}", 31, 1))
+        print(
+            style(
+                f"\n  No .ndjson files in {DATA_DIR} or {OUTPUT_DIR}",
+                31,
+                1,
+            )
+        )
         sys.exit(1)
+
+    data_dir_abs = os.path.abspath(DATA_DIR)
 
     # 2. Select files
     display_names = []
@@ -429,10 +474,17 @@ def main():
     for fp in ndjson_files:
         header, images = parse_ndjson(fp)
         parsed.append((fp, header, images))
-        name = header.get("name", os.path.basename(fp))
+        label = os.path.basename(fp)
         class_names = header.get("class_names", {})
         classes_str = ", ".join(f"{v}" for v in class_names.values()) if class_names else "-"
-        display_names.append(f"{name}  ({len(images)} images, classes: {classes_str})")
+        src = (
+            "data"
+            if os.path.abspath(os.path.dirname(fp)) == data_dir_abs
+            else "output"
+        )
+        display_names.append(
+            f"{label}  ({len(images)} images, classes: {classes_str})  [{src}]"
+        )
 
     indices = prompt_multi_choice("Select files to merge:", display_names)
     selected = [parsed[i] for i in indices]
@@ -448,7 +500,7 @@ def main():
         remap = remap_tables[filepath]
         for img in images:
             all_images.append(remap_image(img, remap))
-        source_names.append(header.get("name", os.path.basename(filepath)))
+        source_names.append(os.path.basename(filepath))
 
     # 4. Count & display distribution
     ann_per_class, img_per_class, no_ann_count = count_distribution(all_images, unified_map)
@@ -510,13 +562,54 @@ def main():
     )
 
     # 5. Handle images without annotations
-    include_no_ann = False
+    no_ann_mode = "off"
+    no_ann_value: float | None = None
     if no_ann_count > 0:
         choice = prompt_choice(
             f"There are {no_ann_count} images without annotations. What should we do?",
-            ["Include them (as negative samples)", "Skip (discard)"],
+            [
+                "Skip (discard)",
+                "Include all (as negative samples)",
+                "Include a random subset — max count (capped by # of positive images in output)",
+                "Include a random subset — max % of positive images in output (1–100)",
+            ],
         )
-        include_no_ann = choice == 0
+        if choice == 1:
+            no_ann_mode = "all"
+        elif choice == 2:
+            no_ann_mode = "count"
+            while True:
+                raw = input(
+                    style(
+                        "  Max negative images (positive integer): ",
+                        2,
+                    )
+                ).strip()
+                try:
+                    n = int(raw)
+                    if n > 0:
+                        no_ann_value = float(n)
+                        break
+                except ValueError:
+                    pass
+                print(style("  Enter a positive integer", 31))
+        elif choice == 3:
+            no_ann_mode = "ratio"
+            while True:
+                raw = input(
+                    style(
+                        "  Max negatives as % of positive images in output (1–100): ",
+                        2,
+                    )
+                ).strip()
+                try:
+                    pct = float(raw)
+                    if 0 < pct <= 100:
+                        no_ann_value = pct
+                        break
+                except ValueError:
+                    pass
+                print(style("  Enter a number between 1 and 100", 31))
 
     # 6. Balancing mode
     mode_choice = prompt_choice(
@@ -579,7 +672,9 @@ def main():
                     print(style("      Enter a positive integer", 31))
 
     # 7. Apply balancing
-    balanced = balance_images(all_images, unified_map, mode, targets, include_no_ann)
+    balanced = balance_images(
+        all_images, unified_map, mode, targets, no_ann_mode, no_ann_value
+    )
 
     # Show result preview
     bal_ann, bal_img, bal_no_ann = count_distribution(balanced, unified_map)
